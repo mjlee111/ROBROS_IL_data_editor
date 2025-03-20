@@ -6,12 +6,13 @@
 import sys
 import h5py
 import numpy as np
-from PyQt6.QtWidgets import QApplication, QMainWindow, QPushButton, QLabel, QVBoxLayout, QWidget, QFileDialog, QSlider, QDockWidget, QTabWidget, QTableWidget, QTableWidgetItem, QMessageBox, QHeaderView, QSizePolicy, QHBoxLayout, QProgressDialog
+from PyQt6.QtWidgets import QApplication, QMainWindow, QPushButton, QLabel, QVBoxLayout, QWidget, QFileDialog, QSlider, QDockWidget, QTabWidget, QTableWidget, QTableWidgetItem, QMessageBox, QHeaderView, QSizePolicy, QHBoxLayout, QProgressDialog, QInputDialog, QCheckBox, QTreeWidget, QTreeWidgetItem, QDialog, QDialogButtonBox, QSplitter
 from PyQt6.QtGui import QImage, QPixmap, QIcon, QColor
-from PyQt6.QtCore import QTimer, Qt
+from PyQt6.QtCore import QTimer, Qt, QSize
 import pyqtgraph as pg
 import cv2
 import os
+import pyqtgraph.opengl as gl
 
 class HDF5Viewer(QMainWindow):
     def __init__(self):
@@ -40,6 +41,8 @@ class HDF5Viewer(QMainWindow):
 
         self.hdf5_files = []
         self.should_plot_reward = False
+        self.xpos_data = None
+        self.gl_widget = None
         self.initUI()
 
     def initUI(self):
@@ -91,68 +94,98 @@ class HDF5Viewer(QMainWindow):
         file_menu = menu_bar.addMenu("File")
         load_hdf5_action = file_menu.addAction("Load HDF5 File")
         load_hdf5_action.triggered.connect(self.load_hdf5)
+        save_hdf5_action = file_menu.addAction("Save HDF5 File")
+        save_hdf5_action.triggered.connect(self.save_hdf5)
         view_menu = menu_bar.addMenu("View")
         toggle_dock_action = view_menu.addAction("Toggle File List")
         toggle_dock_action.triggered.connect(self.toggle_dock_visibility)
 
+        vertical_layout = QVBoxLayout()
+        
+        ## File Name
         self.file_name = QLabel("NO FILE SELECTED")
         self.file_name.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.file_name.setStyleSheet("font-size: 14px; font-weight: bold;")
-        self.layout.addWidget(self.file_name)
+        self.file_name.setMaximumHeight(30)
+        vertical_layout.addWidget(self.file_name)
+        
+        ## Image Tab
+        main_horizontal_layout = QHBoxLayout()
         
         self.tab_widget = QTabWidget()
-        self.layout.addWidget(self.tab_widget)
         
+        no_image_tab = QWidget()
+        no_image_layout = QVBoxLayout(no_image_tab)
+        no_image_label = QLabel("NO IMAGE")
+        no_image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        no_image_layout.addWidget(no_image_label)
+        
+        self.tab_widget.addTab(no_image_tab, "NO IMAGE")
+        
+        main_horizontal_layout.addWidget(self.tab_widget)
+        
+        ## 3D View
+        self.gl_widget = gl.GLViewWidget()
+        self.gl_widget.setCameraPosition(distance=1400)
+        self.gl_widget.setMinimumSize(600, 400)
+        main_horizontal_layout.addWidget(self.gl_widget)
+
+        vertical_layout.addLayout(main_horizontal_layout)
+
+        ## Image Info
         self.image_info_label = QLabel("W: 0 / H: 0")
         self.image_info_label.setAlignment(Qt.AlignmentFlag.AlignLeft)
         self.image_info_label.setStyleSheet("font-size: 12px; font-weight: bold;")
-        self.layout.addWidget(self.image_info_label)
+        self.image_info_label.setMaximumHeight(30)
+        vertical_layout.addWidget(self.image_info_label)
         
+        ## Media Controls
         media_controls_layout = QHBoxLayout()
-    
         self.fb_button = QPushButton("<<")
         self.fb_button.clicked.connect(self.toggle_one_frame_backward)
+        self.fb_button.setMaximumHeight(30)
         media_controls_layout.addWidget(self.fb_button)
         
         self.play_button = QPushButton("Play")
         self.play_button.clicked.connect(self.toggle_play)
+        self.play_button.setMaximumHeight(30)
         media_controls_layout.addWidget(self.play_button)
         
         self.ff_button = QPushButton(">>")
         self.ff_button.clicked.connect(self.toggle_one_frame_forward)
+        self.ff_button.setMaximumHeight(30)
         media_controls_layout.addWidget(self.ff_button)
+        vertical_layout.addLayout(media_controls_layout)
         
-        self.layout.addLayout(media_controls_layout)
-        
+        ## Tick Label
         self.tick_label = QLabel("0 / 0")
         self.tick_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.tick_label.setStyleSheet("font-size: 12px; font-weight: bold; border: 2px solid black; background-color: rgb(128, 128, 128);")
-        self.layout.addWidget(self.tick_label)
+        self.tick_label.setMaximumHeight(30)
+        vertical_layout.addWidget(self.tick_label)
         
+        ## Plot Widget
         self.plot_widget = pg.PlotWidget()
         self.plot_widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.plot_widget.getPlotItem().showGrid(x=True, y=True)
         self.plot_widget.setMouseEnabled(x=False, y=False)
         self.plot_widget.setMaximumHeight(50)
-        self.layout.addWidget(self.plot_widget)
+        vertical_layout.addWidget(self.plot_widget)
 
         self.frame_line = pg.InfiniteLine(angle=90, movable=False, pen=pg.mkPen('r', width=2))
         self.plot_widget.addItem(self.frame_line)
         
+        ## Tick Control Layout
         self.tick_control_layout = QVBoxLayout()
-        self.main_tick_control_layout = QHBoxLayout()
-        
-        
         self.slider = QSlider(Qt.Orientation.Horizontal)
         self.slider.setMinimum(0)
         self.slider.setMaximum(0)  
         self.slider.valueChanged.connect(self.slider_changed)
         self.tick_control_layout.addWidget(self.slider)
-        
-        self.tick_control_layout.addLayout(self.main_tick_control_layout)
-        self.layout.addLayout(self.tick_control_layout)
-
+        vertical_layout.addLayout(self.tick_control_layout)
         self.plot_widget.scene().sigMouseClicked.connect(self.on_plot_click)
+        
+        self.layout.addLayout(vertical_layout)
 
     def load_hdf5(self):
         file_names, _ = QFileDialog.getOpenFileNames(self, "Open HDF5 Files", "", "HDF5 Files (*.hdf5)")
@@ -181,6 +214,86 @@ class HDF5Viewer(QMainWindow):
                     break
 
         progress_dialog.close()
+    
+    def save_hdf5(self):
+        if not hasattr(self, 'hdf5_file'):
+            QMessageBox.warning(self, "Warning", "No HDF5 file loaded.")
+            return
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Save HDF5 File")
+        dialog.setGeometry(100, 100, 500, 500)
+        dialog.setLayout(QVBoxLayout())
+
+        tree_widget = QTreeWidget(dialog)
+        tree_widget.setHeaderLabels(["Dataset/Group", "Select"])
+        dialog.layout().addWidget(tree_widget)
+
+        header = tree_widget.header()
+        header.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+
+        def add_items(parent, hdf5_group, path=""):
+            for key in hdf5_group.keys():
+                item = QTreeWidgetItem(parent)
+                item.setText(0, key)
+                full_path = f"{path}/{key}" if path else key
+                item.setData(0, Qt.ItemDataRole.UserRole, full_path)
+                if isinstance(hdf5_group[key], h5py.Group):
+                    add_items(item, hdf5_group[key], full_path)
+                else:
+                    item.setCheckState(1, Qt.CheckState.Checked)
+                font_metrics = tree_widget.fontMetrics()
+                row_height = font_metrics.height() + 10
+                item.setSizeHint(0, QSize(item.sizeHint(0).width(), row_height))
+
+        root_item = QTreeWidgetItem(tree_widget)
+        root_item.setText(0, "Root")
+        add_items(root_item, self.hdf5_file)
+        tree_widget.expandAll()
+
+        save_to_same_file_checkbox = QCheckBox("Save to the same file", dialog)
+        save_to_same_file_checkbox.setChecked(True)
+        dialog.layout().addWidget(save_to_same_file_checkbox)
+
+        button_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel, dialog)
+        dialog.layout().addWidget(button_box)
+
+        button_box.accepted.connect(dialog.accept)
+        button_box.rejected.connect(dialog.reject)
+
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            selected_datasets = []
+
+            def collect_selected_items(item):
+                if item.checkState(1) == Qt.CheckState.Checked and not item.childCount():
+                    selected_datasets.append(item.data(0, Qt.ItemDataRole.UserRole))
+                for i in range(item.childCount()):
+                    collect_selected_items(item.child(i))
+
+            collect_selected_items(root_item)
+
+            save_to_same_file = save_to_same_file_checkbox.isChecked()
+
+            if not selected_datasets:
+                QMessageBox.warning(self, "Warning", "No datasets selected to save.")
+                return
+
+            if save_to_same_file:
+                file_name = self.file_name.text()
+            else:
+                file_name, _ = QFileDialog.getSaveFileName(self, "Save HDF5 File", "", "HDF5 Files (*.hdf5)")
+                if not file_name:
+                    return
+
+            with h5py.File(file_name, 'w') as hdf5_file:
+                for dataset_path in selected_datasets:
+                    if dataset_path in self.hdf5_file:
+                        data = self.hdf5_file[dataset_path][:]
+                        hdf5_file.create_dataset(dataset_path, data=data)
+                    else:
+                        QMessageBox.warning(self, "Warning", f"Dataset '{dataset_path}' does not exist in the file.")
+
+            QMessageBox.information(self, "Success", f"Data saved to {file_name}.")
 
     def add_file_to_table(self, file_name):
         row_position = self.file_table_widget.rowCount()
@@ -203,8 +316,7 @@ class HDF5Viewer(QMainWindow):
 
     def load_file(self, file_name):
         self.tab_widget.clear()
-        
-        # Update the file name label with the selected file name
+
         self.file_name.setText(os.path.basename(file_name))
 
         self.hdf5_file = h5py.File(file_name, 'r')
@@ -238,6 +350,12 @@ class HDF5Viewer(QMainWindow):
         self.slider.setMaximum(self.images_dict[self.tab_widget.tabText(0)].shape[0] - 1)
         self.slider.setValue(0)
 
+        if 'observations/xpos' in self.hdf5_file:
+            self.xpos_data = self.hdf5_file['observations/xpos'][:]
+            self.update_3d_visualization(self.current_frame)
+        else:
+            self.xpos_data = None
+
         self.plot_reward()
 
     def load_selected_hdf5(self, row, column):
@@ -269,6 +387,22 @@ class HDF5Viewer(QMainWindow):
             frame_width = scaled_pixmap.width()
             frame_height = scaled_pixmap.height()
             self.image_info_label.setText(f"W: {frame_width} / H: {frame_height}")
+
+            self.update_3d_visualization(frame_index)
+
+    def update_3d_visualization(self, frame_index):
+        if self.xpos_data is None:
+            return
+
+        self.gl_widget.clear()
+
+        num_objects = self.xpos_data.shape[1] // 3
+        
+        for i in range(num_objects):
+            xyz_data = self.xpos_data[frame_index, i*3:(i+1)*3].reshape(1, 3)
+            scatter = gl.GLScatterPlotItem(pos=xyz_data, color=(1, 1, 1, 1), size=10)
+            self.gl_widget.addItem(scatter)
+
 
     def next_frame(self):
         if not hasattr(self, 'images_dict') or not self.images_dict:
@@ -327,7 +461,7 @@ class HDF5Viewer(QMainWindow):
         if not hasattr(self, 'reward_data') or not self.should_plot_reward:
             x_data = np.arange(self.total_frames)
             reward_data_flat = np.zeros_like(x_data)
-            color = QColor('#FF0000')
+            color = QColor('#FFFFFF')
         else:
             x_data = np.arange(self.reward_data.shape[0])
             reward_data_flat = self.reward_data.flatten()
